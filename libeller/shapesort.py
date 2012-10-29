@@ -6,95 +6,35 @@ Created on Oct 25, 2012
 @author: ray
 '''
 import os
-from osgeo import ogr
+import subprocess
 
 
-def read(filename, *args, **kwargs):
-    dataset = ogr.Open(filename, *args, **kwargs)
-    if not dataset:
-        raise RuntimeError('could not open %s' % filename)
+def shapesort(source, target, layer, keys,
+              fields=tuple(), desc=False, overwrite=False):
 
-    return dataset
+    if not os.path.exists(source):
+        raise ValueError('source dataset does not exist.')
 
-
-def create(filename):
-    driver = ogr.GetDriverByName('ESRI Shapefile')
-    if driver is None:
-        raise RuntimeError('missing shapefile driver')
-
-    shp = driver.CreateDataSource(filename)
-    if shp is None:
-        raise RuntimeError('could not create file %s' % filename)
-
-    return shp
-
-
-def shapesort(source_dataset, target_dataset, key=None, cmp_func=None):
-
-    if os.path.exists(target_dataset):
+    if not overwrite and os.path.exists(target):
         raise ValueError('target dataset already exists.')
 
-    source = read(source_dataset)
-    target = None
+    keys = list(k.lower() for k in keys)
+    fields = list(f.lower() for f in fields)
 
-    try:
-        for source_layer in source:
+    fields = ' '.join(fields) if fields else '*'
+    sort_keys = ' '.join(keys)
+    sort_order = 'ASC' if not desc else 'DESC'
 
-            if source_layer.GetFeatureCount() == 0:
-                continue
+    if 'area' in keys:
+        keys[keys.index('area')] = 'OGR_GEOM_AREA'
 
-            source_layer_name = source_layer.GetName()
-            source_layer_srs = source_layer.GetSpatialRef()
-            source_layer_defn = source_layer.GetLayerDefn()
+    sql = 'select %(field)s from %(table)s order by %(key)s %(order)s' \
+            % dict(field=fields, table=layer, key=sort_keys, order=sort_order)
+    print sql
+    command = ['ogr2ogr', '-sql', sql, target, source]
+    if overwrite:
+        command.append('-overwrite')
 
-            print source_layer_name
-            print source_layer_srs
-
-            source_layer_geomtype = source_layer_defn.GetGeomType()
-
-            feature_list = list(feature for feature in source_layer)
-            feature_list.sort(key=key, cmp=cmp_func)
-
-            # create new dataset
-            if not target:
-                # lazy initialization
-                target = create(target_dataset)
-            # create layer
-            target_layer = target.CreateLayer(source_layer_name,
-                                              source_layer_srs,
-                                              source_layer_geomtype)
-            # create fields
-            for field_idx in range(source_layer_defn.GetFieldCount()):
-                source_field = source_layer_defn.GetFieldDefn(field_idx)
-
-                field_name = source_field.GetName()
-                field_type = source_field.GetType()
-                field_width = source_field.GetWidth()
-                field_precision = source_field.GetPrecision()
-
-                target_field = ogr.FieldDefn(field_name, field_type)
-                target_field.SetWidth(field_width)
-                target_field.SetPrecision(field_precision)
-
-                target_layer.CreateField(target_field)
-
-            # populate features
-            target_layer_defn = target_layer.GetLayerDefn()
-            for feature in feature_list:
-
-                try:
-                    target_feature = ogr.Feature(feature_def=target_layer_defn)
-                    target_feature.SetFrom(feature, forgiving=False)
-
-                    target_layer.CreateFeature(target_feature)
-
-                finally:
-                    feature.Destroy()
-                    target_feature.Destroy()
-
-    finally:
-        source.Destroy()
-        if target:
-            target.Destroy()
-
+    popen = subprocess.Popen(command)
+    popen.communicate()
 
